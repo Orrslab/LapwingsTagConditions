@@ -1,12 +1,16 @@
 #Set the directory
+rm(list=ls())
+cat("\014")
+###Lines that need to change to the current the date: 51, 148,149, 171.
 setwd('D:/OrrS4/Desktop/Miki/SQL')
-
 # Load libraries 
+
+library(ggpubr)# package needed to the ATLAS package (for plotting)
+library(htmltools) # to add "pop-ups" to leaflet maps
+library(dbscan) # clustering algorithm
 library(toolsForAtlas)
-library(RSQLite)
 library(RMySQL)
 library(ggplot2)
-library(RSQLite)
 library(leaflet)
 library(sp)
 library(rgdal)
@@ -44,7 +48,7 @@ Start_Time_Str_Temp <- as.character.Date(Start_Time_Str)
 ATLAS_Start_Time<-as.numeric(as.POSIXct(Start_Time_Str_Temp,
                                         "%Y-%m-%d %H:%M:%S", tz="UTC"))*1000
 
-End_Time_Str ='2020-07-01 06:00:00' # Need to change to corrent date
+End_Time_Str ='2020-07-27 06:00:00' # Need to change to corrent date
 End_Time_Str_Temp <- as.character.Date(End_Time_Str)
 ATLAS_End_Time<-as.numeric(as.POSIXct(End_Time_Str_Temp,
                                       "%Y-%m-%d %H:%M:%S", tz="UTC"))*1000 
@@ -79,6 +83,9 @@ for (i in 1:length(FullTag)) {
 }
 
 Allthetags <- do.call(rbind.data.frame, AllTags)
+#Remove what i dont need:
+rm(All_Data,AllTags,dbc)
+
 unique(Allthetags$TAG)
 Allthetags$TAG <- substr(Allthetags$TAG, 10, 13)
 
@@ -88,7 +95,8 @@ Allthetags<-Allthetags[order(Allthetags$TAG,Allthetags$TIME),] #make sure data i
 # create a dataframe with the starting time and date
 
 head(Allthetags)
-Allthetags<-addLocAttribute(Allthetags, locAttributs=c("locQuality")) # function to add attributes for time
+Allthetags$DateTime<-as.POSIXct((Allthetags$TIME)/1000, tz="UTC", origin="1970-01-01")
+# function to add attributes for time. I will add speed for later to use
 head(Allthetags)
 
 # I will work with date and dateTime to know the last date and time the tags were active
@@ -96,53 +104,53 @@ head(Allthetags)
 taillist <- list() #empty list
 
 # Make the locations as ITM
-Allthetags2<-convertSpatial.ITM2WGS84(Allthetags, xyColNames=c("X","Y"))
-Allthetags2 <- as.data.frame(Allthetags2)
+Allthetags <-convertSpatial.ITM2WGS84(Allthetags, xyColNames=c("X","Y"))
+Allthetags <- as.data.frame(Allthetags)
 
-head(Allthetags2)
+head(Allthetags)
 
-Lisoftags <- unique(Allthetags2$TAG)  #Create a list with only the tags
+Lisoftags <- unique(Allthetags$TAG)  #Create a list with only the tags
 
 #Make a loop that will give me a list of all the last line in each tag
 
 for(i in 1:length(Lisoftags)) {
-  d <- Allthetags2[Allthetags2$TAG==Lisoftags[i],]
+  d <- Allthetags[Allthetags$TAG==Lisoftags[i],]
   d2 <- tail(d, 1)
-  d2 <- subset(d2, select=c("TAG", "dateTime","date", "LON", "LAT"))
+  d2 <- subset(d2, select=c("TAG", "DateTime", "LON", "LAT"))
   taillist[[i]] <- d2
   print(d2)
 }
+
+rm(d,d2)
 
 #Make the list as data frame
 LastTags <- do.call(rbind.data.frame, taillist)
 #Merge them together:
 AllDates <- merge(ListOfStart, LastTags, by = 'TAG')
 
-#Order the data so it show what I want
-AllDates$end_hour <- substr(AllDates$dateTime, 12,19)
-AllDates<-AllDates[,-which(colnames(AllDates) %in% "dateTime")]
-names(AllDates)[names(AllDates) == "date"] <- "End_date"
-AllDates$End_date <- as.character(AllDates$End_date)
-AllDates <- subset(AllDates, select=-c(TAG2,FullTag))
+#I want to try to make date_diff:
 
-#Now i want to know how much time the battery worked
-AllDates$date_capture <- as.Date(factor(AllDates$date_capture), format = "%d/%m/%Y") #Change to date format
-AllDates$End_date <- as.Date(AllDates$End_date) #Change to date format
-
+LastTags<-LastTags[order(LastTags$TAG),] #make sure data is sorted chronologically (per tag)
+AllDates$fulllast <- LastTags$DateTime
+AllDates$fullstart <- paste(AllDates$date_capture, AllDates$start_hour, sep = " ")
 str(AllDates)
-AllDates$date_diff<-as.numeric(AllDates$End_date - AllDates$date_capture) #Make a new column as the differences in days
-# start and end - need to make it as.numeric becouse the values it give me otherwise are characters
+AllDates$fullstart <- as.POSIXct(AllDates$fullstart, format="%d/%m/%Y %H:%M:%S", tz="UTC")
+AllDates$date_diff <- as.numeric(difftime(AllDates$fulllast, AllDates$fullstart, units = "days"))
+AllDates$date_diff <- round(AllDates$date_diff, digits = 0)
+
+#Without Ofri
+Workornot2 <- AllDates[with(AllDates, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
+counts <- table(Workornot$DeadOrAlive)
+
+#Order the data so it show what I want
+AllDates$End_date <- substr(AllDates$DateTime, 0,10)
+AllDates$DeadOrAlive<- NA
+AllDates$DeadOrAlive[AllDates$End_date == "2020-07-27"] <- "Work" # Need to change according to the last wanted date
+AllDates$DeadOrAlive[AllDates$End_date != "2020-07-27"] <- "Dead" # Need to change to corrent date
 
 #Looking at the data
 hist(AllDates$date_diff)
 plot(density(AllDates$date_diff, na = T))
-
-#working\not working tags
-
-AllDates$DeadOrAlive<- NA
-
-AllDates$DeadOrAlive[AllDates$date_diff >= 0] <- "Dead"
-AllDates$DeadOrAlive[AllDates$End_date == "2020-07-01"] <- "Work" # Need to change according to the last wanted date
 
 #Without Ofri
 Workornot <- AllDates[with(AllDates, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
@@ -154,13 +162,13 @@ ggplot(data=Workornot, aes(x = reorder(TAG, -date_diff), y=date_diff, fill = Dea
   geom_bar(stat="identity")+
   geom_text(aes(label=date_diff), vjust=-0.3, size=3.5)+
   theme_minimal() + ggtitle("Life span of all battery") +
-  xlab("Tags") + ylab("Life span (Days)") +ylim(0, 100) + labs(fill = "Tag Condition")
+  xlab("Tags") + ylab("Life span (Days)") +ylim(0, 120) + labs(fill = "Tag Condition")
 
 table(Workornot$DeadOrAlive)
 
 #See only dead tags:
 
-AllDates$End_date <- na_if(AllDates$End_date, "2020-07-01") # Need to change to corrent date
+AllDates$End_date <- na_if(AllDates$End_date, "2020-07-27") # Need to change to corrent date
 
 #make graph with only working tags:
 
@@ -174,6 +182,11 @@ ggplot(data=barplotfortags2, aes(x = reorder(TAG, -date_diff), y=date_diff )) +
   theme_minimal() + ggtitle("Life span of dead battery") +
   xlab("Tags") + ylab("Life span (Days)")
 
+#Removing unwanted columns:
+AllDates[, !c("FullTag", "TAG2")]
+AllDates <- subset(AllDates, select = -c(FullTag,TAG2,DateTime,date_capture,start_hour) )
+names(AllDates)[names(AllDates) == "fullstart"] <- "Capture_time"
+names(AllDates)[names(AllDates) == "fulllast"] <- "Last_detection_time"
+
 #Write as CSV:
 write.csv(AllDates, file = paste('TagsCondition', 'csv', sep = '.'))
-
