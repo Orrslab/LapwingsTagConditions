@@ -1,10 +1,10 @@
 #Set the directory
 rm(list=ls())
 cat("\014")
-###Lines that need to change to the current the date: 51, 148,149, 171.
+###Lines that need to change to the current the date: 53,173,174,176,177, 229,230.
 setwd('D:/OrrS4/Desktop/Miki/SQL')
 # Load libraries 
-
+library(reshape2)
 library(ggpubr)# package needed to the ATLAS package (for plotting)
 library(htmltools) # to add "pop-ups" to leaflet maps
 library(dbscan) # clustering algorithm
@@ -16,6 +16,7 @@ library(sp)
 library(rgdal)
 library(lubridate)
 library(dplyr)
+library(plyr)
 library(RSQLite)
 library(shiny)
 library(dismo)
@@ -39,6 +40,7 @@ dbc <- dbConnect(RMySQL::MySQL(),
 dbListTables(dbc)           
 
 # --- Examine the names of the columns in a table --------------------------
+dbListFields(dbc, 'DETECTIONS')
 dbListFields(dbc, 'LOCALIZATIONS')
 
 # --- Set start & end time and convert to ATLAS time -----------------------
@@ -48,7 +50,7 @@ Start_Time_Str_Temp <- as.character.Date(Start_Time_Str)
 ATLAS_Start_Time<-as.numeric(as.POSIXct(Start_Time_Str_Temp,
                                         "%Y-%m-%d %H:%M:%S", tz="UTC"))*1000
 
-End_Time_Str ='2020-07-27 06:00:00' # Need to change to corrent date
+End_Time_Str ='2020-07-28 06:00:00' # Need to change to corrent date
 End_Time_Str_Temp <- as.character.Date(End_Time_Str)
 ATLAS_End_Time<-as.numeric(as.POSIXct(End_Time_Str_Temp,
                                       "%Y-%m-%d %H:%M:%S", tz="UTC"))*1000 
@@ -73,120 +75,191 @@ for (i in 1:length(TagListing)){
 
 ListOfStart$TAG <- ListOfStart$TAG2
 FullTag <- ListOfStart$FullTag  #Create a list with only the tags
-AllTags <- list() #make an empty list
+AllTagsDet <- list() #make an empty list for detections
+
+for (i in 1:length(FullTag)) {
+  query = paste('select TAG,TIME from DETECTIONS WHERE TAG=',FullTag[i],
+                'AND TIME >=', ATLAS_Start_Time, 'AND TIME <=', ATLAS_End_Time)
+  All_Data <- dbGetQuery(dbc,query)
+  AllTagsDet[[i]] <- All_Data
+}
+
+AllTagsLoc <- list() #make an empty list for localizations
 
 for (i in 1:length(FullTag)) {
   query = paste('select TAG,TIME,X,Y,Z,VARX,VARY,COVXY from LOCALIZATIONS WHERE TAG=',FullTag[i],
                 'AND TIME >=', ATLAS_Start_Time, 'AND TIME <=', ATLAS_End_Time)
   All_Data <- dbGetQuery(dbc,query)
-  AllTags[[i]] <- All_Data
+  AllTagsLoc[[i]] <- All_Data
 }
 
-Allthetags <- do.call(rbind.data.frame, AllTags)
-#Remove what i dont need:
-rm(All_Data,AllTags,dbc)
+ AllthetagsDet <- do.call(rbind.data.frame, AllTagsDet)
+ AllthetagsLoc <- do.call(rbind.data.frame, AllTagsLoc)
 
-unique(Allthetags$TAG)
-Allthetags$TAG <- substr(Allthetags$TAG, 10, 13)
+ rm(AllTagsDet,AllTagsLoc,dbc)
+ 
+head(AllthetagsLoc)
 
-Allthetags<-Allthetags[order(Allthetags$TAG,Allthetags$TIME),] #make sure data is sorted chronologically (per tag)
-
-
-# create a dataframe with the starting time and date
-
-head(Allthetags)
-Allthetags$DateTime<-as.POSIXct((Allthetags$TIME)/1000, tz="UTC", origin="1970-01-01")
-# function to add attributes for time. I will add speed for later to use
-head(Allthetags)
-
-# I will work with date and dateTime to know the last date and time the tags were active
-
-taillist <- list() #empty list
+names(AllthetagsDet)[names(AllthetagsDet) == "TIME"] <- "Detection_Time"
+names(AllthetagsLoc)[names(AllthetagsLoc) == "TIME"] <- "Location_Time"
 
 # Make the locations as ITM
-Allthetags <-convertSpatial.ITM2WGS84(Allthetags, xyColNames=c("X","Y"))
-Allthetags <- as.data.frame(Allthetags)
+AllthetagsLoc <-convertSpatial.ITM2WGS84(AllthetagsLoc, xyColNames=c("X","Y"))
+AllthetagsLoc <- as.data.frame(AllthetagsLoc)
 
-head(Allthetags)
+AllthetagsDet$DateDetection<-as.POSIXct((AllthetagsDet$Detection_Time)/1000, tz="UTC", origin="1970-01-01")
+AllthetagsLoc$DateLocation<-as.POSIXct((AllthetagsLoc$Location_Time)/1000, tz="UTC", origin="1970-01-01")
 
-Lisoftags <- unique(Allthetags$TAG)  #Create a list with only the tags
+AllthetagsDet$TAG <- substr(AllthetagsDet$TAG, 10, 13)
+AllthetagsLoc$TAG <- substr(AllthetagsLoc$TAG, 10, 13)
 
-#Make a loop that will give me a list of all the last line in each tag
+AllthetagsDet<-AllthetagsDet[order(AllthetagsDet$TAG,AllthetagsDet$Detection_Time),] #make sure data is sorted chronologically (per tag)
+AllthetagsLoc<-AllthetagsLoc[order(AllthetagsLoc$TAG,AllthetagsLoc$Location_Time),] #make sure data is sorted chronologically (per tag)
 
+taillistDet <- list() #empty list
+taillistLoc <- list() #empty list
+
+Lisoftags <- unique(AllthetagsDet$TAG)  #Create a list with only the tags
+
+#For detection
 for(i in 1:length(Lisoftags)) {
-  d <- Allthetags[Allthetags$TAG==Lisoftags[i],]
+  d <- AllthetagsDet[AllthetagsDet$TAG==Lisoftags[i],]
   d2 <- tail(d, 1)
-  d2 <- subset(d2, select=c("TAG", "DateTime", "LON", "LAT"))
-  taillist[[i]] <- d2
+  d2 <- subset(d2, select=c("TAG", "DateDetection"))
+  taillistDet[[i]] <- d2
+  print(d2)
+}
+#For locations
+for(i in 1:length(Lisoftags)) {
+  d <- AllthetagsLoc[AllthetagsLoc$TAG==Lisoftags[i],]
+  d2 <- tail(d, 1)
+  d2 <- subset(d2,  select=c("TAG", "DateLocation", "LON", "LAT"))
+  taillistLoc[[i]] <- d2
   print(d2)
 }
 
-rm(d,d2)
+Lastdet <- do.call(rbind.data.frame, taillistDet)
+Lastloc <- do.call(rbind.data.frame, taillistLoc)
 
-#Make the list as data frame
-LastTags <- do.call(rbind.data.frame, taillist)
-#Merge them together:
-AllDates <- merge(ListOfStart, LastTags, by = 'TAG')
+AllLastDetLoc <- merge(Lastdet, Lastloc, by = 'TAG')
+AllLastDetLoc <- merge(AllLastDetLoc, ListOfStart, by = 'TAG')
 
-#I want to try to make date_diff:
+AllLastDetLoc<-AllLastDetLoc[order(AllLastDetLoc$TAG),] #make sure data is sorted chronologically (per tag)
+AllLastDetLoc$fulllast <- AllLastDetLoc$DateTime
+AllLastDetLoc$fullstart <- paste(AllLastDetLoc$date_capture, AllLastDetLoc$start_hour, sep = " ")
+str(AllLastDetLoc)
+AllLastDetLoc$fullstart <- as.POSIXct(AllLastDetLoc$fullstart, format="%d/%m/%Y %H:%M:%S", tz="UTC")
 
-LastTags<-LastTags[order(LastTags$TAG),] #make sure data is sorted chronologically (per tag)
-AllDates$fulllast <- LastTags$DateTime
-AllDates$fullstart <- paste(AllDates$date_capture, AllDates$start_hour, sep = " ")
-str(AllDates)
-AllDates$fullstart <- as.POSIXct(AllDates$fullstart, format="%d/%m/%Y %H:%M:%S", tz="UTC")
-AllDates$date_diff <- as.numeric(difftime(AllDates$fulllast, AllDates$fullstart, units = "days"))
-AllDates$date_diff <- round(AllDates$date_diff, digits = 0)
+head(AllLastDetLoc)
+#Start_to_det
+AllLastDetLoc$Start_To_Det <- as.numeric(difftime(AllLastDetLoc$DateDetection, AllLastDetLoc$fullstart, units = "days"))
+AllLastDetLoc$Start_To_Det <- round(AllLastDetLoc$Start_To_Det, digits = 0)
+#Start_to_loc
+AllLastDetLoc$Start_To_Loc <- as.numeric(difftime(AllLastDetLoc$DateLocation, AllLastDetLoc$fullstart, units = "days"))
+AllLastDetLoc$Start_To_Loc <- round(AllLastDetLoc$Start_To_Loc, digits = 0)
+#Loc_to_det
+AllLastDetLoc$Loc_To_det <- as.numeric(difftime(AllLastDetLoc$DateDetection, AllLastDetLoc$DateLocation, units = "days"))
+AllLastDetLoc$Loc_To_det <- round(AllLastDetLoc$Loc_To_det, digits = 0)
 
-#Without Ofri
-Workornot2 <- AllDates[with(AllDates, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
-counts <- table(Workornot$DeadOrAlive)
+
 
 #Order the data so it show what I want
-AllDates$End_date <- substr(AllDates$DateTime, 0,10)
-AllDates$DeadOrAlive<- NA
-AllDates$DeadOrAlive[AllDates$End_date == "2020-07-27"] <- "Work" # Need to change according to the last wanted date
-AllDates$DeadOrAlive[AllDates$End_date != "2020-07-27"] <- "Dead" # Need to change to corrent date
+AllLastDetLoc$End_Det <- substr(AllLastDetLoc$DateDetection, 0,10)
+AllLastDetLoc$End_Loc <- substr(AllLastDetLoc$DateLocation, 0,10)
 
-#Looking at the data
-hist(AllDates$date_diff)
-plot(density(AllDates$date_diff, na = T))
+AllLastDetLoc$ProblemDetections<- NA
+AllLastDetLoc$ProblemDetections[AllLastDetLoc$End_Det == "2020-07-28"] <- "Work" # Need to change according to the last wanted date
+AllLastDetLoc$ProblemDetections[AllLastDetLoc$End_Loc == "2020-07-28"] <- "Work" # Need to change according to the last wanted date
+
+AllLastDetLoc$ProblemDetections[AllLastDetLoc$End_Det == "2020-07-28" & AllLastDetLoc$End_Loc != "2020-07-28"] <- "No Location" # Need to change to corrent date
+AllLastDetLoc$ProblemDetections[AllLastDetLoc$End_Det != "2020-07-28" & AllLastDetLoc$End_Loc != "2020-07-28"] <- "Dont work" # Need to change to corrent date
 
 #Without Ofri
-Workornot <- AllDates[with(AllDates, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
-Workornot <- Workornot[1:(nrow(Workornot)-1),]
-counts <- table(Workornot$DeadOrAlive)
+Workornot <- AllLastDetLoc[with(AllLastDetLoc, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
+counts <- table(Workornot$ProblemDetections)
 
+###########
+ggplot(Workornot,
+       aes(y = TAG)) +
+  geom_point(aes(x = fullstart), 
+            color = "Black",
+            alpha = 1,
+            size = 2) +
+  labs(x = "Date", 
+       y = "Tags",
+       title = "Tags life spane") +
+  theme_minimal() + 
+  geom_point(aes( x = DateLocation)) +
+  geom_segment(aes(x = fullstart,
+                   y = TAG,
+                   xend = DateDetection,
+                   yend = TAG),
+                 color = "Red",
+               size = 1) +
+  geom_segment(aes(x = fullstart,
+                   y = TAG,
+                   xend = DateLocation,
+                   yend = TAG),
+               color = "Black",
+               size = 1) +
+  theme(legend.position = "bottom") + 
+  geom_point(aes(x = DateLocation, y = TAG), 
+                                               color = "Red",
+                                               alpha = 1,
+                                               size = 1) + 
+  geom_point(aes(x = DateDetection), 
+             color = "Red",
+             alpha = 1,
+             size = 1) + geom_text(aes( x = DateDetection, label=Start_To_Det), vjust=-0.2, size=2.8)
 
-ggplot(data=Workornot, aes(x = reorder(TAG, -date_diff), y=date_diff, fill = DeadOrAlive )) +
-  geom_bar(stat="identity")+
-  geom_text(aes(label=date_diff), vjust=-0.3, size=3.5)+
-  theme_minimal() + ggtitle("Life span of all battery") +
-  xlab("Tags") + ylab("Life span (Days)") +ylim(0, 120) + labs(fill = "Tag Condition")
+head(Lastdet)
+head(Lastloc)
 
-table(Workornot$DeadOrAlive)
-
-#See only dead tags:
-
-AllDates$End_date <- na_if(AllDates$End_date, "2020-07-27") # Need to change to corrent date
-
-#make graph with only working tags:
-
-barplotfortags <- AllDates[complete.cases(AllDates$End_date), ]
-barplotfortags2 <- barplotfortags[with(barplotfortags, !((TAG >= 131 & TAG <= 135))), ] #Without Ofri
-
-# Graph to see the life span of dead tags
-ggplot(data=barplotfortags2, aes(x = reorder(TAG, -date_diff), y=date_diff )) +
-  geom_bar(stat="identity", fill="steelblue")+
-  geom_text(aes(label=date_diff), vjust=-0.3, size=3.5)+
-  theme_minimal() + ggtitle("Life span of dead battery") +
-  xlab("Tags") + ylab("Life span (Days)")
+AllLastDetLoc$End_Det <- na_if(AllLastDetLoc$End_Det, "2020-07-28") # Need to change to corrent date
+AllLastDetLoc$End_Loc <- na_if(AllLastDetLoc$End_Loc, "2020-07-28") # Need to change to corrent date
+AllLastDetLoc$Loc_To_det <- na_if(AllLastDetLoc$Loc_To_det, 0) # Need to change to corrent date
 
 #Removing unwanted columns:
-AllDates[, !c("FullTag", "TAG2")]
-AllDates <- subset(AllDates, select = -c(FullTag,TAG2,DateTime,date_capture,start_hour) )
-names(AllDates)[names(AllDates) == "fullstart"] <- "Capture_time"
-names(AllDates)[names(AllDates) == "fulllast"] <- "Last_detection_time"
+
+AllLastDetLoc <- subset(AllLastDetLoc, select = -c(FullTag, TAG2,date_capture,start_hour) )
+names(AllLastDetLoc)[names(AllLastDetLoc) == "fullstart"] <- "Capture time"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "DateDetection"] <- "Last detection"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "DateLocation"] <- "Last Location"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "Start_To_Loc"] <- "Location days"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "Loc_To_det"] <- "Detection without location"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "Start_To_Det"] <- "Detection days"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "End_Det"] <- "Last detection date"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "End_Loc"] <- "Last location date"
+names(AllLastDetLoc)[names(AllLastDetLoc) == "ProblemDetections"] <- "Problem Detections"
 
 #Write as CSV:
-write.csv(AllDates, file = paste('TagsCondition', 'csv', sep = '.'))
+write.csv(AllLastDetLoc, file = paste('TagsDecLoc', 'csv', sep = '.'))
+
+
+Lastdet$Indent <- "Detection"
+Lastdet$Time <- AllLastDetLoc$`Detection days`
+
+Lastloc$Indent <- "Location"
+Lastloc$Time <- AllLastDetLoc$`Location days`
+
+names(Lastdet)[names(Lastdet) == "DateDetection"] <- "Last Time"
+names(Lastloc)[names(Lastloc) == "DateLocation"] <- "Last Time"
+
+barplots <- bind_rows(Lastloc, Lastdet)
+
+#Order the data so it show what I want
+barplots$`Last Time`<- substr(barplots$`Last Time`, 0,10)
+barplots$ProblemDetections<- NA
+barplots$ProblemDetections[barplots$`Last Time` == "2020-07-28"] <- "Work" # Need to change according to the last wanted date
+barplots$ProblemDetections[barplots$`Last Time` != "2020-07-28"] <- "Dont Work" # Need to change according to the last wanted date
+
+ggplot(barplots) + 
+  geom_col(aes(x = reorder(TAG, -Time), y = Time, fill = ProblemDetections), size = 1) +
+  geom_line(aes(x = reorder(TAG, -Time), y = Time, color=Indent), size = 1.5, group = 1)
+
+ggplot(data=barplots, aes(x = reorder(TAG, -Time), y=Time , fill = ProblemDetections)) +
+  geom_bar(stat="identity", position=position_dodge()) + scale_fill_brewer(palette="Blues")+
+  geom_line(aes(x = reorder(TAG, -Time), y = Time, color=Indent), size = 1.5, group = 1) +
+  geom_text(aes(label=Time), vjust=-0.3, size=3.5)+
+  theme_minimal() + ggtitle("Life span of all battery") +
+  xlab("Tags") + ylab("Life span (Days)") +ylim(0, 120) + labs(fill = "Tag Condition", color= " ")
